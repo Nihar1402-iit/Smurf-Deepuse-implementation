@@ -17,19 +17,24 @@ from data_loaders import MatUltrasoundDataset, RawUltrasoundDataset
 
 
 class TrainingConfig:
-    """Training hyperparameters"""
+    """Training hyperparameters - DeepUse-inspired configuration"""
     
     def __init__(self):
         self.batch_size = 4
-        self.num_epochs = 30
+        self.num_epochs = 100  # Increased from 30 for better convergence
         self.learning_rate = 1e-4
         self.weight_decay = 1e-5
         self.num_workers = 0
         
-        # Loss weights
+        # Loss weights (DeepUse-inspired)
+        # Primary loss: NCC-based similarity (replaces photometric)
         self.weight_photometric = 1.0
+        # Smoothness: gradient penalty on displacement field
         self.weight_smoothness = 0.1
+        # Strain regularization: smooth strain field
         self.weight_strain_reg = 0.05
+        # Displacement regularization: prevent trivial zero solution
+        self.weight_displacement_reg = 0.01
         
         # Logging
         self.log_interval = 5

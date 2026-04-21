@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from smurf_core import SMURFModel
 from lsqse import LSQSEModule
+from deepuse_utils import ncc_similarity, crop_boundaries
 
 
 class SMURFUltrasoundWrapper(nn.Module):
@@ -214,12 +215,12 @@ class SMURFUltrasoundWithLosses(nn.Module):
         displacement_reg = -torch.log(torch.mean(displacement_mag) + 1e-8)  # Encourage non-zero
         losses["displacement_reg"] = displacement_reg
         
-        # Weighted combination
+        # Weighted combination (DeepUse-inspired)
         total_loss = (
-            1.0 * losses["photometric"] +
-            0.1 * losses["smoothness"] +
-            0.05 * losses["strain_reg"] +
-            0.01 * losses["displacement_reg"]
+            1.0 * losses["photometric"] +           # NCC similarity loss
+            0.1 * losses["smoothness"] +            # Smoothness penalty
+            0.05 * losses["strain_reg"] +           # Strain regularization
+            0.01 * losses["displacement_reg"]       # Displacement regularization
         )
         
         losses["total"] = total_loss
@@ -228,9 +229,9 @@ class SMURFUltrasoundWithLosses(nn.Module):
     
     def _compute_photometric_loss(self, I_t, I_t1, u_lateral, u_axial):
         """
-        Photometric (intensity constancy) loss
+        Photometric (intensity constancy) loss using NCC similarity (DeepUse-style)
         
-        Warps I_t1 using displacement field and compares to I_t
+        Warps I_t1 using displacement field and compares to I_t using NCC instead of L1/L2
         """
         # Create sampling grid
         batch_size, _, height, width = I_t.shape
@@ -261,8 +262,15 @@ class SMURFUltrasoundWithLosses(nn.Module):
             I_t1, grid, mode='bilinear', padding_mode='border', align_corners=True
         )
         
-        # Photometric loss: L1 or L2 difference
-        photometric_loss = torch.mean(torch.abs(I_t - I_t1_warped))
+        # DeepUse-style loss: Use NCC instead of photometric L1/L2
+        # NCC is more robust for ultrasound imaging
+        ncc_map = ncc_similarity(I_t, I_t1_warped, kernel_size=5)
+        
+        # Crop boundaries to remove artifacts (DeepUse approach)
+        ncc_cropped = crop_boundaries(ncc_map, crop_pixels=143)
+        
+        # Loss: 1 - NCC (minimize negative correlation)
+        photometric_loss = 1.0 - ncc_cropped.mean()
         
         return photometric_loss
     
@@ -270,14 +278,18 @@ class SMURFUltrasoundWithLosses(nn.Module):
         """
         Smoothness loss - penalizes large gradients in displacement field
         
-        Encourages piecewise smooth solutions
+        Encourages piecewise smooth solutions. Crops boundaries to focus on quality regions.
         """
-        # Compute gradients
-        grad_u_axial_x = torch.abs(u_axial[:, :, :, :-1] - u_axial[:, :, :, 1:])
-        grad_u_axial_y = torch.abs(u_axial[:, :, :-1, :] - u_axial[:, :, 1:, :])
+        # Crop boundaries to exclude artifact-prone regions
+        u_axial_cropped = crop_boundaries(u_axial, crop_pixels=143)
+        u_lateral_cropped = crop_boundaries(u_lateral, crop_pixels=143)
         
-        grad_u_lateral_x = torch.abs(u_lateral[:, :, :, :-1] - u_lateral[:, :, :, 1:])
-        grad_u_lateral_y = torch.abs(u_lateral[:, :, :-1, :] - u_lateral[:, :, 1:, :])
+        # Compute gradients on cropped region
+        grad_u_axial_x = torch.abs(u_axial_cropped[:, :, :, :-1] - u_axial_cropped[:, :, :, 1:])
+        grad_u_axial_y = torch.abs(u_axial_cropped[:, :, :-1, :] - u_axial_cropped[:, :, 1:, :])
+        
+        grad_u_lateral_x = torch.abs(u_lateral_cropped[:, :, :, :-1] - u_lateral_cropped[:, :, :, 1:])
+        grad_u_lateral_y = torch.abs(u_lateral_cropped[:, :, :-1, :] - u_lateral_cropped[:, :, 1:, :])
         
         # Mean absolute gradients
         smoothness_loss = (
@@ -293,11 +305,14 @@ class SMURFUltrasoundWithLosses(nn.Module):
         """
         Strain regularization loss - encourages smooth strain fields
         
-        Reduces noise in strain estimation
+        Reduces noise in strain estimation. Crops boundaries to focus on quality regions.
         """
+        # Crop boundaries to exclude artifact-prone regions
+        strain_cropped = crop_boundaries(strain, crop_pixels=143)
+        
         # Penalize large strain gradients (assume strain changes smoothly)
-        grad_strain_x = torch.abs(strain[:, :, :, :-1] - strain[:, :, :, 1:])
-        grad_strain_y = torch.abs(strain[:, :, :-1, :] - strain[:, :, 1:, :])
+        grad_strain_x = torch.abs(strain_cropped[:, :, :, :-1] - strain_cropped[:, :, :, 1:])
+        grad_strain_y = torch.abs(strain_cropped[:, :, :-1, :] - strain_cropped[:, :, 1:, :])
         
         strain_reg = torch.mean(grad_strain_x) + torch.mean(grad_strain_y)
         
