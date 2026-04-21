@@ -224,15 +224,22 @@ class SMURFUltrasoundWithLosses(nn.Module):
         batch_size, _, height, width = I_t.shape
         device = I_t.device
         
-        # Normalize coordinates to [-1, 1]
-        y_grid = torch.arange(height, dtype=torch.float32, device=device)
-        x_grid = torch.arange(width, dtype=torch.float32, device=device)
-        x_grid, y_grid = torch.meshgrid(x_grid, y_grid, indexing='xy')
+        # Create base coordinate grids [H, W]
+        y_coords = torch.arange(height, dtype=torch.float32, device=device)
+        x_coords = torch.arange(width, dtype=torch.float32, device=device)
+        x_grid, y_grid = torch.meshgrid(x_coords, y_coords, indexing='xy')
         
+        # Add batch dimension: [H, W] -> [1, H, W] -> [B, H, W]
+        x_grid = x_grid.unsqueeze(0).expand(batch_size, -1, -1)  # [B, H, W]
+        y_grid = y_grid.unsqueeze(0).expand(batch_size, -1, -1)  # [B, H, W]
+        
+        # Apply displacement: u_lateral affects x, u_axial affects y
+        # u_lateral and u_axial are [B, 1, H, W], squeeze to [B, H, W]
         x_grid = 2 * (x_grid + u_lateral.squeeze(1)) / (width - 1) - 1
         y_grid = 2 * (y_grid + u_axial.squeeze(1)) / (height - 1) - 1
         
-        grid = torch.stack([x_grid, y_grid], dim=-1)  # [B, H, W, 2]
+        # Stack to create sampling grid [B, H, W, 2]
+        grid = torch.stack([x_grid, y_grid], dim=-1)
         
         # Warp I_t1 to I_t coordinates
         I_t1_warped = torch.nn.functional.grid_sample(
