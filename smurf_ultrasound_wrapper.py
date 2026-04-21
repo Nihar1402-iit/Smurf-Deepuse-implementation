@@ -182,11 +182,16 @@ class SMURFUltrasoundWithLosses(nn.Module):
             losses: dict of individual losses
             total_loss: weighted sum of all losses
         """
-        displacement = output["displacement"]
         strain = output["strain"]
         
-        u_axial = displacement[:, 0:1, :, :]
-        u_lateral = displacement[:, 1:2, :, :]
+        # Get displacement components - if full output available, use it
+        if "u_lateral" in output and "u_axial" in output:
+            u_axial = output["u_axial"]      # [B, 1, H, W]
+            u_lateral = output["u_lateral"]  # [B, 1, H, W]
+        else:
+            # Otherwise, only axial displacement is available
+            u_axial = output["displacement"]  # [B, 1, H, W]
+            u_lateral = torch.zeros_like(u_axial)  # No lateral component
         
         losses = {}
         
@@ -233,13 +238,16 @@ class SMURFUltrasoundWithLosses(nn.Module):
         x_grid = x_grid.unsqueeze(0).expand(batch_size, -1, -1)  # [B, H, W]
         y_grid = y_grid.unsqueeze(0).expand(batch_size, -1, -1)  # [B, H, W]
         
+        # Squeeze displacement to [B, H, W] if they're [B, 1, H, W]
+        u_lat_squeezed = u_lateral.squeeze(1) if u_lateral.dim() == 4 else u_lateral  # [B, H, W]
+        u_ax_squeezed = u_axial.squeeze(1) if u_axial.dim() == 4 else u_axial        # [B, H, W]
+        
         # Apply displacement: u_lateral affects x, u_axial affects y
-        # u_lateral and u_axial are [B, 1, H, W], squeeze to [B, H, W]
-        x_grid = 2 * (x_grid + u_lateral.squeeze(1)) / (width - 1) - 1
-        y_grid = 2 * (y_grid + u_axial.squeeze(1)) / (height - 1) - 1
+        x_grid_displaced = 2 * (x_grid + u_lat_squeezed) / (width - 1) - 1
+        y_grid_displaced = 2 * (y_grid + u_ax_squeezed) / (height - 1) - 1
         
         # Stack to create sampling grid [B, H, W, 2]
-        grid = torch.stack([x_grid, y_grid], dim=-1)
+        grid = torch.stack([x_grid_displaced, y_grid_displaced], dim=-1)
         
         # Warp I_t1 to I_t coordinates
         I_t1_warped = torch.nn.functional.grid_sample(
