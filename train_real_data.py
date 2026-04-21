@@ -41,9 +41,20 @@ class TrainingConfig:
         self.save_interval = 5
         self.checkpoint_dir = Path("checkpoints")
         
-        # Data paths
+        # Data paths - default to local, override with --train-data and --test-data flags
         self.train_data_dir = "/Users/niharshah/Desktop/Omnistrain/_Data_10M_Part1_"
         self.test_data_dir = "/Users/niharshah/Desktop/Omnistrain/our_algo/test_data_deepuse"
+        
+        # Try server paths if local paths don't exist
+        if not Path(self.train_data_dir).exists():
+            server_train = "/studios/this_studio/Model_comparisons/Smurf-Deepuse-implementation/train_data"
+            if Path(server_train).exists():
+                self.train_data_dir = server_train
+        
+        if not Path(self.test_data_dir).exists():
+            server_test = "/studios/this_studio/Model_comparisons/Smurf-Deepuse-implementation/test_data_deepuse"
+            if Path(server_test).exists():
+                self.test_data_dir = server_test
 
 
 class UltrasoundTrainer:
@@ -95,6 +106,16 @@ class UltrasoundTrainer:
     
     def train(self):
         """Full training loop"""
+        # Verify data directory exists
+        train_data_path = Path(self.config.train_data_dir)
+        if not train_data_path.exists():
+            print(f"ERROR: Training data directory not found: {self.config.train_data_dir}")
+            print("\nPlease provide training data directory using --train-data flag:")
+            print("  python3 train_gpu.py --train-data /path/to/train_data --epochs 100")
+            print("\nOn server, use:")
+            print("  python3 train_gpu.py --train-data /studios/this_studio/Model_comparisons/Smurf-Deepuse-implementation/train_data --epochs 100")
+            return
+        
         # Create datasets
         print("Loading training dataset...")
         train_dataset = MatUltrasoundDataset(
@@ -104,6 +125,14 @@ class UltrasoundTrainer:
         
         if len(train_dataset) == 0:
             print("ERROR: No training data loaded!")
+            print(f"\nChecking directory: {self.config.train_data_dir}")
+            mat_files = list(train_data_path.glob("*.mat"))
+            print(f"Found {len(mat_files)} .mat files")
+            if mat_files:
+                print("Files found:")
+                for f in mat_files[:5]:
+                    print(f"  - {f.name}")
+            print("\nMake sure .mat files contain 'RF' key with ultrasound frames")
             return
         
         # Split into train/val
