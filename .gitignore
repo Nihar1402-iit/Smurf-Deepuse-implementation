@@ -61,11 +61,11 @@ training.log
 test_results/
 results/
 
-# Data (optional - uncomment if storing data in repo)
-# data/
-# *.mat
-# *.raw
-# *.mhd
+# Data directories (too large for git)
+data/
+*.mat
+*.raw
+*.mhd
 
 # Temporary files
 .DS_Store
