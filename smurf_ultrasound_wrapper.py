@@ -239,8 +239,8 @@ class SMURFUltrasoundWithLosses(nn.Module):
         device = I_t.device
         
         # Create coordinate grids normalized to [-1, 1]
-        y_grid = torch.linspace(-1, 1, height, device=device).view(1, height, 1, 1).expand(batch_size, -1, width, -1)
-        x_grid = torch.linspace(-1, 1, width, device=device).view(1, 1, width, 1).expand(batch_size, height, -1, -1)
+        y_grid = torch.linspace(-1, 1, height, device=device).view(1, height, 1, 1).expand(batch_size, height, width, 1)
+        x_grid = torch.linspace(-1, 1, width, device=device).view(1, 1, width, 1).expand(batch_size, height, width, 1)
         
         # Squeeze displacement to [B, H, W] if they're [B, 1, H, W]
         u_lat = u_lateral.squeeze(1) if u_lateral.dim() == 4 else u_lateral  # [B, H, W]
@@ -250,16 +250,16 @@ class SMURFUltrasoundWithLosses(nn.Module):
         u_lat_norm = 2.0 * u_lat / (width - 1)
         u_ax_norm = 2.0 * u_ax / (height - 1)
         
-        # Apply displacement
-        x_warped = x_grid + u_lat_norm.unsqueeze(1)  # Add channel dim back
-        y_warped = y_grid + u_ax_norm.unsqueeze(1)
+        # Add height/width dimensions to match grid [B, H, W] -> [B, H, W, 1]
+        u_lat_norm = u_lat_norm.unsqueeze(-1)
+        u_ax_norm = u_ax_norm.unsqueeze(-1)
         
-        # Remove channel dimension for grid_sample
-        x_warped = x_warped.squeeze(1)  # [B, H, W]
-        y_warped = y_warped.squeeze(1)
+        # Apply displacement to get warped coordinates [B, H, W, 1]
+        x_warped = x_grid + u_lat_norm  # [B, H, W, 1]
+        y_warped = y_grid + u_ax_norm   # [B, H, W, 1]
         
         # Stack to create sampling grid [B, H, W, 2]
-        grid = torch.stack([x_warped, y_warped], dim=-1)
+        grid = torch.cat([x_warped, y_warped], dim=-1)  # [B, H, W, 2]
         
         # Warp I_t1 to I_t coordinates
         I_t1_warped = torch.nn.functional.grid_sample(
