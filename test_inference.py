@@ -123,7 +123,8 @@ def run_inference_on_test_data(config=None):
             
             # Compute statistics
             u_axial = displacement[0, 0]
-            u_lateral = displacement[0, 1]
+            # Check if lateral component exists (displacement format: [B, 1, H, W] or [B, 2, H, W])
+            u_lateral = displacement[0, 1] if displacement.shape[1] > 1 else torch.zeros_like(u_axial)
             
             stats = {
                 "pair_idx": idx,
@@ -190,9 +191,10 @@ def save_test_visualizations(output_dir, idx, displacement, strain, I_t, visuali
     
     # Save DeepUse format (.mat file)
     try:
+        # Displacement is [B, 1, H, W] - extract axial only
         mat_output = {
-            'displacement': displacement[0, 0].cpu().numpy(),  # [H, W]
-            'strain': strain[0, 0].cpu().numpy(),              # [H, W]
+            'displacement': displacement[0, 0].cpu().numpy() if displacement.dim() == 4 else displacement[0].cpu().numpy(),  # [H, W]
+            'strain': strain[0, 0].cpu().numpy() if strain.dim() == 4 else strain[0].cpu().numpy(),              # [H, W]
             'bmode': UltrasoundPreprocessor.normalize_rf(I_t[0] if I_t.dim() == 4 else I_t).numpy(),  # [H, W]
         }
         sio.savemat(
@@ -202,10 +204,14 @@ def save_test_visualizations(output_dir, idx, displacement, strain, I_t, visuali
     except Exception as e:
         print(f"  Warning: Failed to save MAT file: {e}")
     
-    # Displacement heatmaps
+    # Displacement heatmaps - handle single channel
     try:
-        # Create 2-channel displacement for visualization
-        displacement_vis = torch.cat([displacement[:, 0:1], torch.zeros_like(displacement[:, 0:1])], dim=1)
+        if displacement.shape[1] == 1:
+            # Only axial displacement available - create synthetic lateral (zeros)
+            displacement_vis = torch.cat([displacement[:, 0:1], torch.zeros_like(displacement[:, 0:1])], dim=1)  # [B, 2, H, W]
+        else:
+            displacement_vis = displacement  # Already [B, 2, H, W]
+        
         fig, axes = visualizer.create_displacement_heatmap(
             displacement_vis,
             I_t=I_t,
