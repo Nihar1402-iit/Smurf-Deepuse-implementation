@@ -86,14 +86,27 @@ class LSQSEModule(nn.Module):
         
         Strain = du/dy (axial strain)
         
-        Uses finite difference approximation:
+        Uses finite difference approximation with edge handling:
         strain[i,j] ≈ (u[i+1,j] - u[i-1,j]) / 2
         """
-        # Pad for convolution
-        u_padded = F.pad(u_axial, (1, 1, 1, 1), mode='reflect')
+        # Use border-preserving padding (replicate mode) to reduce boundary artifacts
+        u_padded = F.pad(u_axial, (1, 1, 1, 1), mode='replicate')
         
         # Apply Sobel kernel for gradient in y-direction
         strain = F.conv2d(u_padded, self.grad_kernel_y, padding=0)
+        
+        # Suppress boundary artifacts (set boundary pixels to local mean)
+        batch_size, channels, height, width = strain.shape
+        if height > 4 and width > 4:
+            # Interior region
+            interior = strain[:, :, 2:-2, 2:-2]
+            interior_mean = interior.mean()
+            
+            # Zero out extreme boundary values
+            strain[:, :, 0:2, :] = strain[:, :, 0:2, :].clamp(interior_mean * 0.5, interior_mean * 1.5)
+            strain[:, :, -2:, :] = strain[:, :, -2:, :].clamp(interior_mean * 0.5, interior_mean * 1.5)
+            strain[:, :, :, 0:2] = strain[:, :, :, 0:2].clamp(interior_mean * 0.5, interior_mean * 1.5)
+            strain[:, :, :, -2:] = strain[:, :, :, -2:].clamp(interior_mean * 0.5, interior_mean * 1.5)
         
         return strain
     

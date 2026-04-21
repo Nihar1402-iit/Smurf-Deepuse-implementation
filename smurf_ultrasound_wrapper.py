@@ -208,11 +208,18 @@ class SMURFUltrasoundWithLosses(nn.Module):
         strain_regularization = self._compute_strain_regularization(strain)
         losses["strain_reg"] = strain_regularization
         
+        # 4. Displacement magnitude regularization (prevent trivial zero solution)
+        # Encourage the model to output non-zero displacement
+        displacement_mag = torch.sqrt(u_axial**2 + u_lateral**2 + 1e-8)
+        displacement_reg = -torch.log(torch.mean(displacement_mag) + 1e-8)  # Encourage non-zero
+        losses["displacement_reg"] = displacement_reg
+        
         # Weighted combination
         total_loss = (
             1.0 * losses["photometric"] +
             0.1 * losses["smoothness"] +
-            0.05 * losses["strain_reg"]
+            0.05 * losses["strain_reg"] +
+            0.01 * losses["displacement_reg"]
         )
         
         losses["total"] = total_loss
