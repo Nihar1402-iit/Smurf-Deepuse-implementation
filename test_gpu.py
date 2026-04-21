@@ -58,7 +58,7 @@ def main():
     print()
     
     # Run inference
-    run_inference_on_test_data()
+    run_inference_on_test_data(config)
     
     # Plot training history
     print("\nGenerating training history plot...")

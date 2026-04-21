@@ -27,9 +27,10 @@ class TestConfig:
         self.frame_width = 1000
 
 
-def run_inference_on_test_data():
+def run_inference_on_test_data(config=None):
     """Run inference on all test data"""
-    config = TestConfig()
+    if config is None:
+        config = TestConfig()
     config.output_dir.mkdir(exist_ok=True)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
