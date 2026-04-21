@@ -239,15 +239,15 @@ class SMURFUltrasoundWithLosses(nn.Module):
         device = I_t.device
         
         # Create coordinate grids normalized to [-1, 1]
-        # Use clone() to avoid creating views
         y_coords = torch.linspace(-1, 1, height, device=device, dtype=I_t.dtype)
         x_coords = torch.linspace(-1, 1, width, device=device, dtype=I_t.dtype)
         
         y_grid, x_grid = torch.meshgrid(y_coords, x_coords, indexing='ij')
         
-        # Expand and clone to avoid views
-        y_grid = y_grid.unsqueeze(0).unsqueeze(-1).expand(batch_size, -1, -1, 1).clone()  # [B, H, W, 1]
-        x_grid = x_grid.unsqueeze(0).unsqueeze(-1).expand(batch_size, -1, -1, 1).clone()  # [B, H, W, 1]
+        # Use repeat() instead of expand() to create actual copies (not views)
+        # repeat() creates new tensors, avoiding gradient computation issues
+        y_grid = y_grid.unsqueeze(0).unsqueeze(-1).repeat(batch_size, 1, 1, 1).float()  # [B, H, W, 1]
+        x_grid = x_grid.unsqueeze(0).unsqueeze(-1).repeat(batch_size, 1, 1, 1).float()  # [B, H, W, 1]
         
         # Squeeze displacement to [B, H, W] if they're [B, 1, H, W]
         u_lat = u_lateral.squeeze(1) if u_lateral.dim() == 4 else u_lateral  # [B, H, W]
