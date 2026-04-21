@@ -11,6 +11,9 @@ import json
 from datetime import datetime
 import time
 
+# Enable anomaly detection for debugging (disable for faster training once stable)
+torch.autograd.set_detect_anomaly(False)
+
 from smurf_core import SMURFModel
 from smurf_ultrasound_wrapper import SMURFUltrasoundWithLosses
 from data_loaders import MatUltrasoundDataset, RawUltrasoundDataset

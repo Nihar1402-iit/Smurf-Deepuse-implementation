@@ -233,35 +233,37 @@ class SMURFUltrasoundWithLosses(nn.Module):
         Photometric (intensity constancy) loss using warp and compare
         
         Warps I_t1 using displacement field and compares to I_t using L1 loss
-        (simpler than NCC but more stable during training)
         """
         # Create sampling grid
         batch_size, _, height, width = I_t.shape
         device = I_t.device
         
-        # Create base coordinate grids [H, W] - use clone() to avoid in-place issues
-        y_coords = torch.arange(height, dtype=torch.float32, device=device)
-        x_coords = torch.arange(width, dtype=torch.float32, device=device)
-        x_grid, y_grid = torch.meshgrid(x_coords, y_coords, indexing='xy')
-        
-        # Add batch dimension and detach to avoid gradient tracking on grid creation
-        x_grid = x_grid.unsqueeze(0).expand(batch_size, -1, -1).detach()  # [B, H, W]
-        y_grid = y_grid.unsqueeze(0).expand(batch_size, -1, -1).detach()  # [B, H, W]
+        # Create coordinate grids normalized to [-1, 1]
+        y_grid = torch.linspace(-1, 1, height, device=device).view(1, height, 1, 1).expand(batch_size, -1, width, -1)
+        x_grid = torch.linspace(-1, 1, width, device=device).view(1, 1, width, 1).expand(batch_size, height, -1, -1)
         
         # Squeeze displacement to [B, H, W] if they're [B, 1, H, W]
-        u_lat_squeezed = u_lateral.squeeze(1) if u_lateral.dim() == 4 else u_lateral  # [B, H, W]
-        u_ax_squeezed = u_axial.squeeze(1) if u_axial.dim() == 4 else u_axial        # [B, H, W]
+        u_lat = u_lateral.squeeze(1) if u_lateral.dim() == 4 else u_lateral  # [B, H, W]
+        u_ax = u_axial.squeeze(1) if u_axial.dim() == 4 else u_axial        # [B, H, W]
         
-        # Apply displacement: u_lateral affects x, u_axial affects y
-        x_grid_displaced = 2.0 * (x_grid + u_lat_squeezed) / (width - 1) - 1.0
-        y_grid_displaced = 2.0 * (y_grid + u_ax_squeezed) / (height - 1) - 1.0
+        # Normalize displacement to grid space [-1, 1]
+        u_lat_norm = 2.0 * u_lat / (width - 1)
+        u_ax_norm = 2.0 * u_ax / (height - 1)
+        
+        # Apply displacement
+        x_warped = x_grid + u_lat_norm.unsqueeze(1)  # Add channel dim back
+        y_warped = y_grid + u_ax_norm.unsqueeze(1)
+        
+        # Remove channel dimension for grid_sample
+        x_warped = x_warped.squeeze(1)  # [B, H, W]
+        y_warped = y_warped.squeeze(1)
         
         # Stack to create sampling grid [B, H, W, 2]
-        grid = torch.stack([x_grid_displaced, y_grid_displaced], dim=-1)
+        grid = torch.stack([x_warped, y_warped], dim=-1)
         
         # Warp I_t1 to I_t coordinates
         I_t1_warped = torch.nn.functional.grid_sample(
-            I_t1, grid, mode='bilinear', padding_mode='border', align_corners=True
+            I_t1, grid, mode='bilinear', padding_mode='border', align_corners=False
         )
         
         # Simple L1 photometric loss (robust and stable)
@@ -273,18 +275,15 @@ class SMURFUltrasoundWithLosses(nn.Module):
         """
         Smoothness loss - penalizes large gradients in displacement field
         
-        Encourages piecewise smooth solutions. Crops boundaries to focus on quality regions.
+        Encourages piecewise smooth solutions.
         """
-        # Crop boundaries to exclude artifact-prone regions
-        u_axial_cropped = crop_boundaries(u_axial, crop_pixels=143)
-        u_lateral_cropped = crop_boundaries(u_lateral, crop_pixels=143)
+        # Compute gradients directly without cropping to avoid gradient computation issues
+        # Use difference operations that work with autograd
+        grad_u_axial_x = torch.abs(u_axial[:, :, :, :-1] - u_axial[:, :, :, 1:])
+        grad_u_axial_y = torch.abs(u_axial[:, :, :-1, :] - u_axial[:, :, 1:, :])
         
-        # Compute gradients on cropped region - use clone to avoid in-place issues
-        grad_u_axial_x = torch.abs(u_axial_cropped[:, :, :, :-1].clone() - u_axial_cropped[:, :, :, 1:].clone())
-        grad_u_axial_y = torch.abs(u_axial_cropped[:, :, :-1, :].clone() - u_axial_cropped[:, :, 1:, :].clone())
-        
-        grad_u_lateral_x = torch.abs(u_lateral_cropped[:, :, :, :-1].clone() - u_lateral_cropped[:, :, :, 1:].clone())
-        grad_u_lateral_y = torch.abs(u_lateral_cropped[:, :, :-1, :].clone() - u_lateral_cropped[:, :, 1:, :].clone())
+        grad_u_lateral_x = torch.abs(u_lateral[:, :, :, :-1] - u_lateral[:, :, :, 1:])
+        grad_u_lateral_y = torch.abs(u_lateral[:, :, :-1, :] - u_lateral[:, :, 1:, :])
         
         # Mean absolute gradients
         smoothness_loss = (
@@ -295,22 +294,16 @@ class SMURFUltrasoundWithLosses(nn.Module):
         )
         
         return smoothness_loss
-        
-        return smoothness_loss
     
     def _compute_strain_regularization(self, strain):
         """
         Strain regularization loss - encourages smooth strain fields
         
-        Reduces noise in strain estimation. Crops boundaries to focus on quality regions.
+        Reduces noise in strain estimation.
         """
-        # Crop boundaries to exclude artifact-prone regions
-        strain_cropped = crop_boundaries(strain, crop_pixels=143)
-        
         # Penalize large strain gradients (assume strain changes smoothly)
-        # Use clone to avoid in-place operation issues
-        grad_strain_x = torch.abs(strain_cropped[:, :, :, :-1].clone() - strain_cropped[:, :, :, 1:].clone())
-        grad_strain_y = torch.abs(strain_cropped[:, :, :-1, :].clone() - strain_cropped[:, :, 1:, :].clone())
+        grad_strain_x = torch.abs(strain[:, :, :, :-1] - strain[:, :, :, 1:])
+        grad_strain_y = torch.abs(strain[:, :, :-1, :] - strain[:, :, 1:, :])
         
         strain_reg = torch.mean(grad_strain_x) + torch.mean(grad_strain_y)
         
