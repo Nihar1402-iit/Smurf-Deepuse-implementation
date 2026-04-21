@@ -239,27 +239,35 @@ class SMURFUltrasoundWithLosses(nn.Module):
         device = I_t.device
         
         # Create coordinate grids normalized to [-1, 1]
-        y_grid = torch.linspace(-1, 1, height, device=device).view(1, height, 1, 1).expand(batch_size, height, width, 1)
-        x_grid = torch.linspace(-1, 1, width, device=device).view(1, 1, width, 1).expand(batch_size, height, width, 1)
+        # Use clone() to avoid creating views
+        y_coords = torch.linspace(-1, 1, height, device=device, dtype=I_t.dtype)
+        x_coords = torch.linspace(-1, 1, width, device=device, dtype=I_t.dtype)
+        
+        y_grid, x_grid = torch.meshgrid(y_coords, x_coords, indexing='ij')
+        
+        # Expand and clone to avoid views
+        y_grid = y_grid.unsqueeze(0).unsqueeze(-1).expand(batch_size, -1, -1, 1).clone()  # [B, H, W, 1]
+        x_grid = x_grid.unsqueeze(0).unsqueeze(-1).expand(batch_size, -1, -1, 1).clone()  # [B, H, W, 1]
         
         # Squeeze displacement to [B, H, W] if they're [B, 1, H, W]
         u_lat = u_lateral.squeeze(1) if u_lateral.dim() == 4 else u_lateral  # [B, H, W]
         u_ax = u_axial.squeeze(1) if u_axial.dim() == 4 else u_axial        # [B, H, W]
         
         # Normalize displacement to grid space [-1, 1]
-        u_lat_norm = 2.0 * u_lat / (width - 1)
-        u_ax_norm = 2.0 * u_ax / (height - 1)
+        u_lat_norm = 2.0 * u_lat / max(width - 1, 1)
+        u_ax_norm = 2.0 * u_ax / max(height - 1, 1)
         
-        # Add height/width dimensions to match grid [B, H, W] -> [B, H, W, 1]
-        u_lat_norm = u_lat_norm.unsqueeze(-1)
-        u_ax_norm = u_ax_norm.unsqueeze(-1)
+        # Add height/width dimensions and clone [B, H, W] -> [B, H, W, 1]
+        u_lat_norm = u_lat_norm.unsqueeze(-1).clone()
+        u_ax_norm = u_ax_norm.unsqueeze(-1).clone()
         
         # Apply displacement to get warped coordinates [B, H, W, 1]
-        x_warped = x_grid + u_lat_norm  # [B, H, W, 1]
-        y_warped = y_grid + u_ax_norm   # [B, H, W, 1]
+        # Create new tensors instead of modifying views
+        x_warped = x_grid.clone() + u_lat_norm  # [B, H, W, 1]
+        y_warped = y_grid.clone() + u_ax_norm   # [B, H, W, 1]
         
         # Stack to create sampling grid [B, H, W, 2]
-        grid = torch.cat([x_warped, y_warped], dim=-1)  # [B, H, W, 2]
+        grid = torch.stack([x_warped.squeeze(-1), y_warped.squeeze(-1)], dim=-1)  # [B, H, W, 2]
         
         # Warp I_t1 to I_t coordinates
         I_t1_warped = torch.nn.functional.grid_sample(
@@ -276,22 +284,25 @@ class SMURFUltrasoundWithLosses(nn.Module):
         Smoothness loss - penalizes large gradients in displacement field
         
         Encourages piecewise smooth solutions.
+        Uses simple L1 differences to remain numerically stable.
         """
-        # Compute gradients directly without cropping to avoid gradient computation issues
-        # Use difference operations that work with autograd
-        grad_u_axial_x = torch.abs(u_axial[:, :, :, :-1] - u_axial[:, :, :, 1:])
-        grad_u_axial_y = torch.abs(u_axial[:, :, :-1, :] - u_axial[:, :, 1:, :])
+        # Compute finite differences for gradients
+        # dx: difference in x direction (lateral)
+        # dy: difference in y direction (axial)
         
-        grad_u_lateral_x = torch.abs(u_lateral[:, :, :, :-1] - u_lateral[:, :, :, 1:])
-        grad_u_lateral_y = torch.abs(u_lateral[:, :, :-1, :] - u_lateral[:, :, 1:, :])
+        # Axial smoothness
+        dx_axial = torch.abs(u_axial[..., 1:] - u_axial[..., :-1])  # [B,C,H,W-1]
+        dy_axial = torch.abs(u_axial[..., 1:, :] - u_axial[..., :-1, :])  # [B,C,H-1,W]
         
-        # Mean absolute gradients
+        # Lateral smoothness
+        dx_lateral = torch.abs(u_lateral[..., 1:] - u_lateral[..., :-1])  # [B,C,H,W-1]
+        dy_lateral = torch.abs(u_lateral[..., 1:, :] - u_lateral[..., :-1, :])  # [B,C,H-1,W]
+        
+        # Mean of all gradients
         smoothness_loss = (
-            torch.mean(grad_u_axial_x) +
-            torch.mean(grad_u_axial_y) +
-            torch.mean(grad_u_lateral_x) +
-            torch.mean(grad_u_lateral_y)
-        )
+            torch.mean(dx_axial) + torch.mean(dy_axial) +
+            torch.mean(dx_lateral) + torch.mean(dy_lateral)
+        ) / 4.0
         
         return smoothness_loss
     
